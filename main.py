@@ -1,6 +1,21 @@
 from flask import Flask, request, send_file, jsonify
 from playwright.sync_api import sync_playwright
 import os
+from googleapiclient.discovery import build
+from google.auth import default
+
+def fetch_sheet_data(spreadsheet_id, sheet_name, cell_range):
+
+    creds, _ = default(scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"])
+
+    service = build("sheets", "v4", credentials=creds)
+
+    result = service.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range=f"{sheet_name}!{cell_range}"
+    ).execute()
+
+    return result.get("values", [])
 
 app = Flask(__name__)
 
@@ -60,19 +75,71 @@ def generate():
 
     data = request.json
 
-    # Expecting:
-    # { "table": [["A","B"],["1","2"]] }
+    spreadsheet_id = data.get("spreadsheetId")
+    sheet_name = data.get("sheetName")
+    cell_range = data.get("range")
 
-    table_data = data.get("table")
+    if not spreadsheet_id:
+        return jsonify({"error": "Missing spreadsheetId"}), 400
+
+    table_data = fetch_sheet_data(spreadsheet_id, sheet_name, cell_range)
 
     if not table_data:
-        return jsonify({"error": "No table data provided"}), 400
+        return jsonify({"error": "No data found"}), 400
 
-    html = generate_html_table(table_data)
+    html = generate_html_from_formatted(request.json)
     file_path = take_screenshot(html)
 
     return send_file(file_path, mimetype="image/jpeg")
 
+def generate_html_from_formatted(data):
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    html = """
+    <html>
+    <head>
+    <style>
+    body { font-family: Arial; padding: 20px; }
+    table { border-collapse: collapse; }
+    td {
+        border: 1px solid #ccc;
+        padding: 8px;
+        min-width: 80px;
+    }
+    </style>
+    </head>
+    <body>
+    """
+
+    for block in data.values():
+
+        values = block["values"]
+        bg = block["backgrounds"]
+        colors = block["fontColors"]
+        weights = block["fontWeights"]
+        sizes = block["fontSizes"]
+        aligns = block["horizontalAlignments"]
+
+        html += "<table>"
+
+        for i in range(len(values)):
+            html += "<tr>"
+
+            for j in range(len(values[i])):
+
+                style = f"""
+                background:{bg[i][j]};
+                color:{colors[i][j]};
+                font-weight:{weights[i][j]};
+                font-size:{sizes[i][j]}px;
+                text-align:{aligns[i][j]};
+                """
+
+                html += f"<td style='{style}'>{values[i][j]}</td>"
+
+            html += "</tr>"
+
+        html += "</table><br><br>"
+
+    html += "</body></html>"
+
+    return html 
