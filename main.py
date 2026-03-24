@@ -1,10 +1,3 @@
-import os
-import time
-import datetime
-import gspread
-from playwright.sync_api import sync_playwright
-from google.oauth2.service_account import Credentials
-
 from flask import Flask, request, send_file, jsonify
 from playwright.sync_api import sync_playwright
 import os
