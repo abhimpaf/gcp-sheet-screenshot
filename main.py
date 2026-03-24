@@ -5,84 +5,81 @@ import gspread
 from playwright.sync_api import sync_playwright
 from google.oauth2.service_account import Credentials
 
-# --- CONFIGURATION ---
-SHEET_ID = 'YOUR_SPREADSHEET_ID'
-DRIVE_FOLDER_ID = '1J4vznMLK7SWWWWg8kn_w7p4FulKHFaEo'
-# Path to your Service Account JSON in the Docker container
-SERVICE_ACCOUNT_FILE = 'service_account.json'
+from flask import Flask, request, send_file, jsonify
+from playwright.sync_api import sync_playwright
+import os
 
-def get_screenshot():
-    # 1. AUTHENTICATION & DATA SLICING
-    scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-    creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=scopes)
-    client = gspread.authorize(creds)
-    ss = client.open_by_key(SHEET_ID)
-    source_sheet = ss.worksheet("fr_hourly")
+app = Flask(__name__)
 
-    # Calculate Hourly Columns (7 AM start at Column E)
-    now = datetime.datetime.now()
-    report_hour = now.hour - 1
-    if report_hour < 7 or report_hour > 22: return
-    start_col_idx = 4 + ((report_hour - 7) * 3)
+def generate_html_table(data):
+    html = """
+    <html>
+    <head>
+    <style>
+    body { font-family: Arial; padding: 20px; }
+    table { border-collapse: collapse; }
+    td {
+        border: 1px solid #ccc;
+        padding: 10px;
+        min-width: 80px;
+        text-align: center;
+    }
+    tr:nth-child(1) {
+        background-color: #f2f2f2;
+        font-weight: bold;
+    }
+    </style>
+    </head>
+    <body>
+    <table>
+    """
 
-    # 2. CREATE STITCHED TEMP SHEET
-    # We create a temp sheet so Playwright only sees the 7 relevant columns
-    try:
-        temp_sheet = ss.add_worksheet(title="Temp_Snapshot", rows="100", cols="7")
-    except:
-        temp_sheet = ss.worksheet("Temp_Snapshot")
-        temp_sheet.clear()
+    for row in data:
+        html += "<tr>"
+        for cell in row:
+            html += f"<td>{cell}</td>"
+        html += "</tr>"
 
-    # Get A-D and Hourly Data from Row 2 (Headers)
-    # Note: We use the API to "stitch" columns side-by-side
-    all_data = source_sheet.get_all_values()
-    headers = all_data[1:3] # Rows 2 and 3
-    body = all_data[3:]     # Row 4 onwards
+    html += "</table></body></html>"
+    return html
 
-    # 3. PLAYWRIGHT RENDERER
+
+def take_screenshot(html):
+    output_path = "/tmp/output.jpg"
+
     with sync_playwright() as p:
-        # Launch browser with specific viewport for high-res
-        browser = p.chromium.launch(headless=True)
-        # Use a context to handle auth cookies if necessary, 
-        # or just make the temp sheet "anyone with link can view" for the bot
-        page = browser.new_page(viewport={'width': 1280, 'height': 800})
-        
-        # Get unique batches from Column A
-        batches = list(set([row[0] for row in body if row[0]]))
-
-        for batch in batches:
-            # Build the specific table for this batch
-            output_table = []
-            for h in headers:
-                output_table.append(h[0:4] + h[start_col_idx : start_col_idx+3])
-            
-            for row in body:
-                if row[0] == batch:
-                    output_table.append(row[0:4] + row[start_col_idx : start_col_idx+3])
-
-            # Write to temp sheet
-            temp_sheet.clear()
-            temp_sheet.update('A1', output_table)
-            
-            # Construct the URL to the specific sheet
-            url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit#gid={temp_sheet.id}"
-            
-            # Navigate and take screenshot
-            page.goto(url, wait_until="networkidle")
-            
-            # Wait for Google Sheets UI to settle and hide the grid/toolbars via URL params
-            page.goto(url + "&rm=minimal", wait_until="networkidle")
-            time.sleep(2) # Allow fonts/values to render
-
-            # Target the specific spreadsheet canvas element
-            selector = ".grid-container" 
-            page.locator(selector).screenshot(path=f"{batch}_report.jpg", type="jpeg", quality=90)
-            print(f"Captured screenshot for {batch}")
-
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.set_content(html)
+        page.screenshot(path=output_path, type="jpeg", quality=90, full_page=True)
         browser.close()
-    
-    # Cleanup
-    ss.del_worksheet(temp_sheet)
+
+    return output_path
+
+
+@app.route("/", methods=["GET"])
+def home():
+    return "Image API is running"
+
+
+@app.route("/generate", methods=["POST"])
+def generate():
+
+    data = request.json
+
+    # Expecting:
+    # { "table": [["A","B"],["1","2"]] }
+
+    table_data = data.get("table")
+
+    if not table_data:
+        return jsonify({"error": "No table data provided"}), 400
+
+    html = generate_html_table(table_data)
+    file_path = take_screenshot(html)
+
+    return send_file(file_path, mimetype="image/jpeg")
+
 
 if __name__ == "__main__":
-    get_screenshot()
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
