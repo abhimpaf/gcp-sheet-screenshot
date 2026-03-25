@@ -15,15 +15,12 @@ def generate_html_from_formatted(payload):
     <html>
     <head>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700&display=swap" rel="stylesheet">
-    
     <style>
     body {
         margin: 0;
         padding: 0;
         background: #ffffff;
         display: inline-block;
-        
-        /* Prioritize IBM Plex Mono, fallback to system mono fonts */
         font-family: 'IBM Plex Mono', 'Cascadia Mono', Consolas, monospace;
     }
     table {
@@ -35,7 +32,8 @@ def generate_html_from_formatted(payload):
     td {
         border: 1px solid #cccccc;
         padding: 4px 8px; 
-        white-space: nowrap; 
+        white-space: nowrap; /* Forces exact width */
+        width: max-content;  /* Prevents columns from artificially stretching */
         empty-cells: show;
     }
     </style>
@@ -61,6 +59,10 @@ def generate_html_from_formatted(payload):
             html += "<tr>"
 
             for j in range(len(values[i])):
+                # OPTIMIZATION: If this is the top title row, skip rendering the blank filler cells
+                if i == 0 and j > 0:
+                    continue
+
                 val = values[i][j]
                 bg = safe_get(backgrounds, i, j, "#ffffff")
                 color = safe_get(font_colors, i, j, "#000000")
@@ -70,12 +72,12 @@ def generate_html_from_formatted(payload):
 
                 style = f"background:{bg}; color:{color}; font-weight:{weight}; font-size:{size}px; text-align:{align};"
 
-                # 2. VISUAL DIVIDER: Add a thicker border after Column D (Index 3)
+                # Keep the divider line after column D
                 if j == 3:
                     style += " border-right: 2px solid #999999;"
 
-                # Handle the Top Merged Title Row
-                if i == 0 and len(values[i]) == 1:
+                # Force the title cell to stretch across the entire table
+                if i == 0 and j == 0:
                     html += f"<td colspan='{max_cols}' style='{style}'>{val}</td>"
                 else:
                     html += f"<td style='{style}'>{val}</td>"
