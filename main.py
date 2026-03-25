@@ -11,28 +11,31 @@ app = Flask(__name__)
 def generate_html_from_formatted(payload):
     blocks = payload.get("data", payload)
 
-    # 1. CSS UPGRADES: Tighter padding, nowrap, and standard Arial
     html = """
     <html>
     <head>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700&display=swap" rel="stylesheet">
+    
     <style>
     body {
         margin: 0;
         padding: 0;
         background: #ffffff;
         display: inline-block;
-        font-family: Arial, sans-serif;
+        
+        /* Prioritize IBM Plex Mono, fallback to system mono fonts */
+        font-family: 'IBM Plex Mono', 'Cascadia Mono', Consolas, monospace;
     }
     table {
         border-collapse: collapse;
         margin: 0;
         border-spacing: 0;
-        font-size: 13px; /* Matches Google Sheets default */
+        font-size: 13px;
     }
     td {
-        border: 1px solid #cccccc; /* Crisper, lighter standard border */
-        padding: 4px 8px; /* Tighter padding to match sheets */
-        white-space: nowrap; /* Forces columns to fit widest content perfectly */
+        border: 1px solid #cccccc;
+        padding: 4px 8px; 
+        white-space: nowrap; 
         empty-cells: show;
     }
     </style>
