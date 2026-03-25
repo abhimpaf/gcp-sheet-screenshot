@@ -6,12 +6,12 @@ import io
 app = Flask(__name__)
 
 # -------------------------------
-# HTML GENERATOR WITH FORMATTING
+# HTML GENERATOR WITH SPREADSHEET CSS
 # -------------------------------
 def generate_html_from_formatted(payload):
-    blocks = payload.get("data", payload)  # fallback if no wrapper
+    blocks = payload.get("data", payload)
 
-    # Removed body padding/margins so the table sits perfectly flush
+    # 1. CSS UPGRADES: Tighter padding, nowrap, and standard Arial
     html = """
     <html>
     <head>
@@ -27,13 +27,13 @@ def generate_html_from_formatted(payload):
         border-collapse: collapse;
         margin: 0;
         border-spacing: 0;
+        font-size: 13px; /* Matches Google Sheets default */
     }
     td {
-        border: 1px solid #d0d0d0;
-        padding: 6px 10px;
-        min-width: 80px;
-        max-width: 200px;
-        word-wrap: break-word;
+        border: 1px solid #cccccc; /* Crisper, lighter standard border */
+        padding: 4px 8px; /* Tighter padding to match sheets */
+        white-space: nowrap; /* Forces columns to fit widest content perfectly */
+        empty-cells: show;
     }
     </style>
     </head>
@@ -52,8 +52,6 @@ def generate_html_from_formatted(payload):
             continue
 
         html += "<table>"
-        
-        # Calculate maximum columns in the data to know how wide to stretch the merged header
         max_cols = max((len(row) for row in values), default=1)
 
         for i in range(len(values)):
@@ -69,7 +67,11 @@ def generate_html_from_formatted(payload):
 
                 style = f"background:{bg}; color:{color}; font-weight:{weight}; font-size:{size}px; text-align:{align};"
 
-                # OPTIMIZATION: If this is the very first row and it only has 1 value, merge it!
+                # 2. VISUAL DIVIDER: Add a thicker border after Column D (Index 3)
+                if j == 3:
+                    style += " border-right: 2px solid #999999;"
+
+                # Handle the Top Merged Title Row
                 if i == 0 and len(values[i]) == 1:
                     html += f"<td colspan='{max_cols}' style='{style}'>{val}</td>"
                 else:
@@ -81,9 +83,6 @@ def generate_html_from_formatted(payload):
     html += "</body></html>"
     return html
 
-# -------------------------------
-# SAFE ACCESS HELPER
-# -------------------------------
 def safe_get(arr, i, j, default):
     try:
         return arr[i][j]
@@ -91,7 +90,7 @@ def safe_get(arr, i, j, default):
         return default
 
 # -------------------------------
-# SCREENSHOT FUNCTION (OPTIMIZED)
+# SCREENSHOT FUNCTION (PNG UPGRADE)
 # -------------------------------
 def take_screenshot(html):
     with sync_playwright() as p:
@@ -99,9 +98,8 @@ def take_screenshot(html):
         page = browser.new_page()
         page.set_content(html)
         
-        # OPTIMIZATION: Target ONLY the table edge-to-edge. No timeouts needed.
-        # Returns bytes directly in RAM (no disk writing)
-        image_bytes = page.locator("table").screenshot(type="jpeg", quality=90)
+        # 3. SWITCH TO PNG: Lossless format makes colors vibrant and text sharp
+        image_bytes = page.locator("table").screenshot(type="png")
         
         browser.close()
     return image_bytes
@@ -111,7 +109,7 @@ def take_screenshot(html):
 # -------------------------------
 @app.route("/", methods=["GET"])
 def home():
-    return "✅ Image API is running edge-to-edge"
+    return "✅ Image API is running with high-fidelity PNG output"
 
 @app.route("/generate", methods=["POST"])
 def generate():
@@ -121,15 +119,13 @@ def generate():
             return jsonify({"error": "No JSON received"}), 400
 
         html = generate_html_from_formatted(payload)
-        
-        # Get image bytes directly from memory
         image_bytes = take_screenshot(html)
 
-        # Serve the bytes without ever touching the hard drive
+        # Serve as PNG
         return send_file(
             io.BytesIO(image_bytes), 
-            mimetype="image/jpeg",
-            download_name="screenshot.jpg"
+            mimetype="image/png",
+            download_name="screenshot.png"
         )
 
     except Exception as e:
