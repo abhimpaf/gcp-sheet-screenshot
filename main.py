@@ -1,123 +1,59 @@
 from flask import Flask, request, send_file, jsonify
 from playwright.sync_api import sync_playwright
 import os
-from googleapiclient.discovery import build
-from google.auth import default
-
-def fetch_sheet_data(spreadsheet_id, sheet_name, cell_range):
-
-    creds, _ = default(scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"])
-
-    service = build("sheets", "v4", credentials=creds)
-
-    result = service.spreadsheets().values().get(
-        spreadsheetId=spreadsheet_id,
-        range=f"{sheet_name}!{cell_range}"
-    ).execute()
-
-    return result.get("values", [])
+import time
 
 app = Flask(__name__)
 
-def generate_html_table(data):
-    html = """
+# -------------------------------
+# HTML GENERATOR WITH FORMATTING
+# -------------------------------
+
+def generate_html_from_formatted(payload):
+
+    meta = payload.get("meta", {})
+    blocks = payload.get("data", payload)  # fallback if no wrapper
+
+    html = f"""
     <html>
     <head>
     <style>
-    body { font-family: Arial; padding: 20px; }
-    table { border-collapse: collapse; }
-    td {
-        border: 1px solid #ccc;
-        padding: 10px;
+    body {{
+        font-family: Arial;
+        padding: 20px;
+        background: #ffffff;
+    }}
+    table {{
+        border-collapse: collapse;
+        margin-bottom: 30px;
+    }}
+    td {{
+        border: 1px solid #d0d0d0;
+        padding: 6px 10px;
         min-width: 80px;
-        text-align: center;
-    }
-    tr:nth-child(1) {
-        background-color: #f2f2f2;
-        font-weight: bold;
-    }
-    </style>
-    </head>
-    <body>
-    <table>
-    """
-
-    for row in data:
-        html += "<tr>"
-        for cell in row:
-            html += f"<td>{cell}</td>"
-        html += "</tr>"
-
-    html += "</table></body></html>"
-    return html
-
-
-def take_screenshot(html):
-    output_path = "/tmp/output.jpg"
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page()
-        page.set_content(html)
-        page.screenshot(path=output_path, type="jpeg", quality=90, full_page=True)
-        browser.close()
-
-    return output_path
-
-
-@app.route("/", methods=["GET"])
-def home():
-    return "Image API is running"
-
-
-@app.route("/generate", methods=["POST"])
-def generate():
-
-    data = request.json
-
-    spreadsheet_id = data.get("spreadsheetId")
-    sheet_name = data.get("sheetName")
-    cell_range = data.get("range")
-
-    if not spreadsheet_id:
-        return jsonify({"error": "Missing spreadsheetId"}), 400
-
-    table_data = fetch_sheet_data(spreadsheet_id, sheet_name, cell_range)
-
-    if not table_data:
-        return jsonify({"error": "No data found"}), 400
-
-    html = generate_html_from_formatted(request.json)
-    file_path = take_screenshot(html)
-
-    return send_file(file_path, mimetype="image/jpeg")
-
-def generate_html_from_formatted(data):
-
-    html = """
-    <html>
-    <head>
-    <style>
-    body { font-family: Arial; padding: 20px; }
-    table { border-collapse: collapse; }
-    td {
-        border: 1px solid #ccc;
-        padding: 8px;
-        min-width: 80px;
-    }
+        max-width: 200px;
+        word-wrap: break-word;
+    }}
     </style>
     </head>
     <body>
     """
 
-    for block in data.values():
+    # Optional title
+    if meta:
+        html += f"""
+        <h3>{meta.get("spreadsheetName", "")} - {meta.get("sheetName", "")}</h3>
+        """
 
-        values = block["values"]
-        bg = block["backgrounds"]
-        colors = block["fontColors"]
-        weights = block["fontWeights"]
-        sizes = block["fontSizes"]
-        aligns = block["horizontalAlignments"]
+    # Loop through blocks (r1, r2, etc.)
+    for block_name, block in blocks.items():
+
+        values = block.get("values", [])
+        backgrounds = block.get("backgrounds", [])
+        font_colors = block.get("fontColors", [])
+        font_weights = block.get("fontWeights", [])
+        font_sizes = block.get("fontSizes", [])
+        aligns = block.get("horizontalAlignments", [])
 
         html += "<table>"
 
@@ -126,20 +62,108 @@ def generate_html_from_formatted(data):
 
             for j in range(len(values[i])):
 
+                val = values[i][j] if j < len(values[i]) else ""
+
+                bg = safe_get(backgrounds, i, j, "#ffffff")
+                color = safe_get(font_colors, i, j, "#000000")
+                weight = safe_get(font_weights, i, j, "normal")
+                size = safe_get(font_sizes, i, j, 10)
+                align = safe_get(aligns, i, j, "left")
+
                 style = f"""
-                background:{bg[i][j]};
-                color:{colors[i][j]};
-                font-weight:{weights[i][j]};
-                font-size:{sizes[i][j]}px;
-                text-align:{aligns[i][j]};
+                background:{bg};
+                color:{color};
+                font-weight:{weight};
+                font-size:{size}px;
+                text-align:{align};
                 """
 
-                html += f"<td style='{style}'>{values[i][j]}</td>"
+                html += f"<td style='{style}'>{val}</td>"
 
             html += "</tr>"
 
-        html += "</table><br><br>"
+        html += "</table>"
 
     html += "</body></html>"
 
-    return html 
+    return html
+
+
+# -------------------------------
+# SAFE ACCESS HELPER
+# -------------------------------
+
+def safe_get(arr, i, j, default):
+    try:
+        return arr[i][j]
+    except:
+        return default
+
+
+# -------------------------------
+# SCREENSHOT FUNCTION
+# -------------------------------
+
+def take_screenshot(html):
+
+    file_path = f"/tmp/output_{int(time.time())}.jpg"
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+
+        page.set_content(html)
+
+        # Allow rendering time
+        page.wait_for_timeout(500)
+
+        page.screenshot(
+            path=file_path,
+            type="jpeg",
+            quality=90,
+            full_page=True
+        )
+
+        browser.close()
+
+    return file_path
+
+
+# -------------------------------
+# ROUTES
+# -------------------------------
+
+@app.route("/", methods=["GET"])
+def home():
+    return "✅ Image API with formatting is running"
+
+
+@app.route("/generate", methods=["POST"])
+def generate():
+
+    try:
+        payload = request.json
+
+        if not payload:
+            return jsonify({"error": "No JSON received"}), 400
+
+        # Debug logs
+        print("Incoming keys:", payload.keys())
+
+        html = generate_html_from_formatted(payload)
+
+        file_path = take_screenshot(html)
+
+        return send_file(file_path, mimetype="image/jpeg")
+
+    except Exception as e:
+        print("ERROR:", str(e))
+        return jsonify({"error": str(e)}), 500
+
+
+# -------------------------------
+# LOCAL RUN
+# -------------------------------
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
