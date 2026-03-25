@@ -93,15 +93,23 @@ def safe_get(arr, i, j, default):
         return default
 
 # -------------------------------
-# SCREENSHOT FUNCTION (PNG UPGRADE)
+# SCREENSHOT FUNCTION (ULTRA-CRISP UPGRADE)
 # -------------------------------
 def take_screenshot(html):
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        page = browser.new_page()
-        page.set_content(html)
         
-        # 3. SWITCH TO PNG: Lossless format makes colors vibrant and text sharp
+        # 1. FIX BLURRINESS: Emulate a Retina/4K display (3x pixel density)
+        context = browser.new_context(device_scale_factor=2) 
+        page = context.new_page()
+        
+        # 2. FIX TYPEWRITER FONT: Tell it to wait until network traffic stops (downloads finish)
+        page.set_content(html, wait_until="networkidle")
+        
+        # 3. EXTRA SAFETY: Explicitly force the browser to wait until all web fonts are fully rendered
+        page.evaluate("document.fonts.ready")
+        
+        # Snap the lossless PNG
         image_bytes = page.locator("table").screenshot(type="png")
         
         browser.close()
