@@ -7,4 +7,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "main:app"]
+# We added --timeout 300 to give Playwright 5 minutes to generate all images
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--timeout", "300", "main:app"]
