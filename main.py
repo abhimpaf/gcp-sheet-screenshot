@@ -5,7 +5,7 @@ import base64
 import os
 
 app = Flask(__name__)
-FALLBACK_EMAIL = os.environ.get("FALLBACK_EMAIL", "abhimanyurollno2@gmail.com")
+FALLBACK_EMAIL = os.environ.get("FALLBACK_EMAIL", "abhimanyu.singh@advait.org.in")
 
 def process_data(raw_data, current_hour):
     # FIXED: The CSV labels the 18:00-19:00 block as "19:00". 
