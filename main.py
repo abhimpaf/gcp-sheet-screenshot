@@ -8,7 +8,8 @@ app = Flask(__name__)
 FALLBACK_EMAIL = os.environ.get("FALLBACK_EMAIL", "abhimanyu.singh@advait.org.in")
 
 def process_data(raw_data, current_hour):
-    prev_hour_str = f"{current_hour - 1:02d}:00"
+    # FIXED: The CSV labels the 18:00-19:00 block as "19:00". 
+    target_hour_str = f"{current_hour:02d}:00" 
     time_frame = f"{current_hour - 1}:00 - {current_hour}:00"
     
     header_idx = next((i for i, row in enumerate(raw_data) if "Batch" in row and "Name" in row), 0)
@@ -23,10 +24,17 @@ def process_data(raw_data, current_hour):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
 
+    # Cleanly map the column names
     df_total = df[df['Time Slot'] == 'Total'].rename(columns={'Attempts': 'Total Attempts', 'Valid Calls': 'Total Calls'})
-    df_hourly = df[df['Time Slot'] == prev_hour_str].rename(columns={'Attempts': 'Hourly Attempts', 'Valid Calls': 'Hourly Calls', 'FEN': 'Hourly FEN', 'REN': 'Hourly REN', 'FR': 'Hourly FR'})
+    df_hourly = df[df['Time Slot'] == target_hour_str].rename(columns={'Valid Calls': 'Calls'}) # Keep Attempts, FEN, REN, FR as is
 
-    merged = pd.merge(df_total[['Batch', 'Name', 'Total Attempts', 'Total Calls']], df_hourly[['Batch', 'Name', 'Hourly Attempts', 'Hourly Calls', 'Hourly FEN', 'Hourly REN', 'Hourly FR']], on=['Batch', 'Name'], how='outer').fillna(0)
+    # Merge Data
+    merged = pd.merge(
+        df_total[['Batch', 'Name', 'Total Attempts', 'Total Calls']], 
+        df_hourly[['Batch', 'Name', 'Attempts', 'Calls', 'FEN', 'REN', 'FR']], 
+        on=['Batch', 'Name'], how='outer'
+    ).fillna(0)
+    
     merged = merged.sort_values(by='Total Calls', ascending=False)
     
     batches = {}
@@ -34,20 +42,25 @@ def process_data(raw_data, current_hour):
         if not batch_name: continue
         batch_df = merged[merged['Batch'] == batch_name].copy()
         
+        # Determine specific columns with the new shortened headers
         if batch_name.startswith('OV') or batch_name.startswith('EOV'):
             if current_hour < 9 or current_hour > 22: continue
-            display_cols = ['Name', 'Total Attempts', 'Total Calls', 'Hourly Attempts', 'Hourly Calls', 'Hourly FEN']
-            batch_df = batch_df[(batch_df['Hourly Calls'] < 3) & (batch_df['Hourly Attempts'] < 40) & (batch_df['Hourly FEN'] < 1)]
+            display_cols = ['Name', 'Total Attempts', 'Total Calls', 'Attempts', 'Calls', 'FEN']
+            batch_df = batch_df[(batch_df['Calls'] < 3) & (batch_df['Attempts'] < 40) & (batch_df['FEN'] < 1)]
             if current_hour >= 11: batch_df = batch_df[batch_df['Total Calls'] > 0]
+            
         elif (batch_name.startswith('W') and batch_name != 'W9') or batch_name == 'Leaders':
-            display_cols = ['Name', 'Total Attempts', 'Total Calls', 'Hourly Attempts', 'Hourly Calls', 'Hourly FR']
+            display_cols = ['Name', 'Total Attempts', 'Total Calls', 'Attempts', 'Calls', 'FR']
+            
         elif batch_name.startswith('F') or batch_name.startswith('R') or batch_name == 'W9':
-            display_cols = ['Name', 'Total Attempts', 'Total Calls', 'Hourly Attempts', 'Hourly Calls', 'Hourly FEN', 'Hourly REN']
-        else: continue
+            display_cols = ['Name', 'Total Attempts', 'Total Calls', 'Attempts', 'Calls', 'FEN', 'REN']
+        else: 
+            continue
             
         if batch_df.empty: continue
         final_df = batch_df[display_cols].copy()
         
+        # Build the TOTAL row
         total_row = {col: final_df[col].sum() for col in display_cols[1:]}
         total_row['Name'] = 'TOTAL'
         final_df = pd.concat([final_df, pd.DataFrame([total_row])], ignore_index=True)
@@ -58,9 +71,40 @@ def process_data(raw_data, current_hour):
 
 def generate_html(batch_data):
     max_cols = batch_data["colsCount"]
-    html = f"<html><head><link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700&display=swap' rel='stylesheet'><style>body {{ margin: 0; padding: 0; background: #ffffff; display: inline-block; font-family: 'IBM Plex Mono', monospace; }} table {{ border-collapse: collapse; margin: 0; font-size: 11px; }} td {{ border: 1px solid #cccccc; padding: 5px 10px; white-space: nowrap; width: max-content; }} .title-row {{ font-weight: bold; font-size: 13px; text-align: center; background: #ffffff; }} .header-row td {{ font-weight: bold; text-align: center; background: #f9f9f9; }} .data-row td {{ text-align: center; }} .data-row td:nth-child(1) {{ text-align: left; }} .total-row td {{ font-weight: bold; background: #e0e0e0; text-align: center; }} .total-row td:nth-child(1) {{ text-align: left; }} .divider {{ border-right: 2px solid #666666 !important; }}</style></head><body><table><tr><td colspan='{max_cols}' class='title-row'>{batch_data['title']}</td></tr><tr class='header-row'>"
+    
+    # CSS Updated with Colors for Headers and Names
+    html = f"""
+    <html>
+    <head>
+    <link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700&display=swap' rel='stylesheet'>
+    <style>
+    body {{ margin: 0; padding: 0; background: #ffffff; display: inline-block; font-family: 'IBM Plex Mono', monospace; }} 
+    table {{ border-collapse: collapse; margin: 0; font-size: 11px; }} 
+    td {{ border: 1px solid #cccccc; padding: 6px 12px; white-space: nowrap; width: max-content; }} 
+    .title-row {{ font-weight: bold; font-size: 13px; text-align: center; background: #ffffff; color: #333333; }} 
+    
+    /* Blue header with white text */
+    .header-row td {{ font-weight: bold; text-align: center; background: #3b82f6; color: #ffffff; border: 1px solid #2563eb; }} 
+    
+    .data-row td {{ text-align: center; }} 
+    /* Blue bold text for agent names */
+    .data-row td:nth-child(1) {{ text-align: left; color: #1d4ed8; font-weight: bold; }} 
+    
+    .total-row td {{ font-weight: bold; background: #e5e7eb; text-align: center; color: #000000; }} 
+    .total-row td:nth-child(1) {{ text-align: left; }} 
+    
+    /* Slightly thicker divider line */
+    .divider {{ border-right: 2px solid #94a3b8 !important; }}
+    </style>
+    </head>
+    <body>
+    <table>
+        <tr><td colspan='{max_cols}' class='title-row'>{batch_data['title']}</td></tr>
+        <tr class='header-row'>
+    """
     for i, h in enumerate(batch_data["headers"]): html += f"<td class='{'divider' if i == 2 else ''}'>{h}</td>"
     html += "</tr>"
+    
     for r_idx, row in enumerate(batch_data["rows"]):
         row_cls = "total-row" if r_idx == len(batch_data["rows"]) - 1 else "data-row"
         html += f"<tr class='{row_cls}'>"
