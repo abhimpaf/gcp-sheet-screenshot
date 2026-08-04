@@ -5,9 +5,6 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ✅ IMPORTANT (ensures browser works)
-RUN playwright install --with-deps
-
 COPY . .
 
-CMD exec gunicorn --bind :$PORT --workers 1 --threads 8 main:app
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "main:app"]
