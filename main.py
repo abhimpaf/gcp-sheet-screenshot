@@ -53,12 +53,19 @@ def generate_html_from_formatted(payload):
         if not values:
             continue
             
-        # Dynamically find the index of Name and Total Calls to ensure styling doesn't break
+        # Dynamically find the indexes to ensure styling doesn't break
+        batch_idx = 0 # Fallback to index 0
         name_idx = 1 # Fallback to index 1
         divider_idx = 3 # Fallback to index 3
         
         if len(values) > 1:
             headers_lower = [str(h).strip().lower() for h in values[1]]
+            
+            try:
+                batch_idx = headers_lower.index("batch")
+            except ValueError:
+                pass
+                
             try:
                 name_idx = headers_lower.index("name")
             except ValueError:
@@ -105,9 +112,9 @@ def generate_html_from_formatted(payload):
                 
                 # 3. Data Rows
                 else:
-                    if j == name_idx:
-                        # Dynamic Agent Names column (Yellow Highlight)
-                        bg = "#fef08a" 
+                    # Highlight BOTH Batch and Name columns in a lighter yellow
+                    if j == batch_idx or j == name_idx:
+                        bg = "#fef9c3" # Lighter shade of yellow
                         weight = "bold"
                         align = "left"
                     else:
@@ -157,7 +164,7 @@ def take_screenshot(html):
 # -------------------------------
 @app.route("/", methods=["GET"])
 def home():
-    return "✅ Image API is running (Optimized Reverted Architecture)"
+    return "✅ Image API is running (Optimized Reverted Architecture with Lighter Yellow Highlights)"
 
 @app.route("/generate", methods=["POST"])
 def generate():
