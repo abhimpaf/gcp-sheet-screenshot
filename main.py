@@ -52,6 +52,25 @@ def generate_html_from_formatted(payload):
 
         if not values:
             continue
+            
+        # Dynamically find the index of Name and Total Calls to ensure styling doesn't break
+        name_idx = 1 # Fallback to index 1
+        divider_idx = 3 # Fallback to index 3
+        
+        if len(values) > 1:
+            headers_lower = [str(h).strip().lower() for h in values[1]]
+            try:
+                name_idx = headers_lower.index("name")
+            except ValueError:
+                pass
+                
+            try:
+                divider_idx = headers_lower.index("total calls")
+            except ValueError:
+                try:
+                    divider_idx = headers_lower.index("valid calls")
+                except ValueError:
+                    pass
 
         html += "<table>"
         max_cols = max((len(row) for row in values), default=1)
@@ -86,25 +105,22 @@ def generate_html_from_formatted(payload):
                 
                 # 3. Data Rows
                 else:
-                    if j == 0:
-                        # Agent Names (Yellow Highlight)
+                    if j == name_idx:
+                        # Dynamic Agent Names column (Yellow Highlight)
                         bg = "#fef08a" 
                         weight = "bold"
                         align = "left"
                     else:
                         align = "center"
-                        # Pull the red threshold highlight from Apps Script payload!
-                        # Fallback to white if Apps Script didn't send a color.
+                        # Pull the red threshold highlight from Apps Script payload
                         sheet_bg = safe_get(backgrounds, i, j, "#ffffff")
-                        
-                        # Apply it only if Apps Script sent a non-white color (like Red)
                         if sheet_bg.lower() not in ["#ffffff", "#fff", "white"]:
                             bg = sheet_bg
 
                 style = f"background:{bg}; color:{color}; font-weight:{weight}; text-align:{align};"
 
-                # Keep the divider line after column 4 (Index 3)
-                if j == 3:
+                # Keep the divider line dynamically after Total Calls
+                if j == divider_idx:
                     style += " border-right: 2px solid #94a3b8;"
 
                 if i == 0 and j == 0:
@@ -141,7 +157,7 @@ def take_screenshot(html):
 # -------------------------------
 @app.route("/", methods=["GET"])
 def home():
-    return "✅ Image API is running (Reverted to Original Architecture with Red Highlights)"
+    return "✅ Image API is running (Optimized Reverted Architecture)"
 
 @app.route("/generate", methods=["POST"])
 def generate():
