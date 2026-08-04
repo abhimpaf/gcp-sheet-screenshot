@@ -1,149 +1,125 @@
-from flask import Flask, request, send_file, jsonify
+from flask import Flask, request, jsonify
 from playwright.sync_api import sync_playwright
+import pandas as pd
+import base64
 import os
-import io
 
 app = Flask(__name__)
+FALLBACK_EMAIL = os.environ.get("FALLBACK_EMAIL", "abhimanyu.singh@advait.org.in")
 
-# -------------------------------
-# HTML GENERATOR WITH SPREADSHEET CSS
-# -------------------------------
-def generate_html_from_formatted(payload):
-    blocks = payload.get("data", payload)
+def process_data(raw_data, current_hour):
+    prev_hour_str = f"{current_hour - 1:02d}:00"
+    time_frame = f"{current_hour - 1}:00 - {current_hour}:00"
+    
+    header_idx = next((i for i, row in enumerate(raw_data) if "Batch" in row and "Name" in row), 0)
+    cell_a1 = raw_data[0][0] if raw_data and raw_data[0] else ""
+    last_updated_str = cell_a1.split("|")[0].strip() if "|" in cell_a1 else ""
+    title_text = f"{last_updated_str} | {time_frame} Hours" if last_updated_str else f"Outreach Hourly Report: {time_frame} Hours"
 
-    html = """
-    <html>
-    <head>
-    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700&display=swap" rel="stylesheet">
-    <style>
-    body {
-        margin: 0;
-        padding: 0;
-        background: #ffffff;
-        display: inline-block;
-        font-family: 'IBM Plex Mono', 'Cascadia Mono', Consolas, monospace;
-    }
-    table {
-        border-collapse: collapse;
-        margin: 0;
-        border-spacing: 0;
-        font-size: 13px;
-    }
-    td {
-        border: 1px solid #cccccc;
-        padding: 4px 8px; 
-        white-space: nowrap; /* Forces exact width */
-        width: max-content;  /* Prevents columns from artificially stretching */
-        empty-cells: show;
-    }
-    </style>
-    </head>
-    <body>
-    """
+    headers = raw_data[header_idx]
+    df = pd.DataFrame(raw_data[header_idx + 1:], columns=headers)
+    
+    for col in ['Attempts', 'Valid Calls', 'FEN', 'REN', 'FR']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
 
-    for block_name, block in blocks.items():
-        values = block.get("values", [])
-        backgrounds = block.get("backgrounds", [])
-        font_colors = block.get("fontColors", [])
-        font_weights = block.get("fontWeights", [])
-        font_sizes = block.get("fontSizes", [])
-        aligns = block.get("horizontalAlignments", [])
+    df_total = df[df['Time Slot'] == 'Total'].rename(columns={'Attempts': 'Total Attempts', 'Valid Calls': 'Total Calls'})
+    df_hourly = df[df['Time Slot'] == prev_hour_str].rename(columns={'Attempts': 'Hourly Attempts', 'Valid Calls': 'Hourly Calls', 'FEN': 'Hourly FEN', 'REN': 'Hourly REN', 'FR': 'Hourly FR'})
 
-        if not values:
-            continue
+    merged = pd.merge(df_total[['Batch', 'Name', 'Total Attempts', 'Total Calls']], df_hourly[['Batch', 'Name', 'Hourly Attempts', 'Hourly Calls', 'Hourly FEN', 'Hourly REN', 'Hourly FR']], on=['Batch', 'Name'], how='outer').fillna(0)
+    merged = merged.sort_values(by='Total Calls', ascending=False)
+    
+    batches = {}
+    for batch_name in merged['Batch'].unique():
+        if not batch_name: continue
+        batch_df = merged[merged['Batch'] == batch_name].copy()
+        
+        if batch_name.startswith('OV') or batch_name.startswith('EOV'):
+            if current_hour < 9 or current_hour > 22: continue
+            display_cols = ['Name', 'Total Attempts', 'Total Calls', 'Hourly Attempts', 'Hourly Calls', 'Hourly FEN']
+            batch_df = batch_df[(batch_df['Hourly Calls'] < 3) & (batch_df['Hourly Attempts'] < 40) & (batch_df['Hourly FEN'] < 1)]
+            if current_hour >= 11: batch_df = batch_df[batch_df['Total Calls'] > 0]
+        elif (batch_name.startswith('W') and batch_name != 'W9') or batch_name == 'Leaders':
+            display_cols = ['Name', 'Total Attempts', 'Total Calls', 'Hourly Attempts', 'Hourly Calls', 'Hourly FR']
+        elif batch_name.startswith('F') or batch_name.startswith('R') or batch_name == 'W9':
+            display_cols = ['Name', 'Total Attempts', 'Total Calls', 'Hourly Attempts', 'Hourly Calls', 'Hourly FEN', 'Hourly REN']
+        else: continue
+            
+        if batch_df.empty: continue
+        final_df = batch_df[display_cols].copy()
+        
+        total_row = {col: final_df[col].sum() for col in display_cols[1:]}
+        total_row['Name'] = 'TOTAL'
+        final_df = pd.concat([final_df, pd.DataFrame([total_row])], ignore_index=True)
+        
+        batches[batch_name] = {"title": title_text, "headers": display_cols, "rows": final_df.values.tolist(), "colsCount": len(display_cols)}
+    
+    return batches, time_frame
 
-        html += "<table>"
-        max_cols = max((len(row) for row in values), default=1)
-
-        for i in range(len(values)):
-            html += "<tr>"
-
-            for j in range(len(values[i])):
-                # OPTIMIZATION: If this is the top title row, skip rendering the blank filler cells
-                if i == 0 and j > 0:
-                    continue
-
-                val = values[i][j]
-                bg = safe_get(backgrounds, i, j, "#ffffff")
-                color = safe_get(font_colors, i, j, "#000000")
-                weight = safe_get(font_weights, i, j, "normal")
-                size = safe_get(font_sizes, i, j, 10)
-                align = safe_get(aligns, i, j, "left")
-
-                style = f"background:{bg}; color:{color}; font-weight:{weight}; font-size:{size}px; text-align:{align};"
-
-                # Keep the divider line after column D
-                if j == 3:
-                    style += " border-right: 2px solid #999999;"
-
-                # Force the title cell to stretch across the entire table
-                if i == 0 and j == 0:
-                    html += f"<td colspan='{max_cols}' style='{style}'>{val}</td>"
-                else:
-                    html += f"<td style='{style}'>{val}</td>"
-
-            html += "</tr>"
-        html += "</table>"
-
-    html += "</body></html>"
+def generate_html(batch_data):
+    max_cols = batch_data["colsCount"]
+    html = f"<html><head><link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700&display=swap' rel='stylesheet'><style>body {{ margin: 0; padding: 0; background: #ffffff; display: inline-block; font-family: 'IBM Plex Mono', monospace; }} table {{ border-collapse: collapse; margin: 0; font-size: 11px; }} td {{ border: 1px solid #cccccc; padding: 5px 10px; white-space: nowrap; width: max-content; }} .title-row {{ font-weight: bold; font-size: 13px; text-align: center; background: #ffffff; }} .header-row td {{ font-weight: bold; text-align: center; background: #f9f9f9; }} .data-row td {{ text-align: center; }} .data-row td:nth-child(1) {{ text-align: left; }} .total-row td {{ font-weight: bold; background: #e0e0e0; text-align: center; }} .total-row td:nth-child(1) {{ text-align: left; }} .divider {{ border-right: 2px solid #666666 !important; }}</style></head><body><table><tr><td colspan='{max_cols}' class='title-row'>{batch_data['title']}</td></tr><tr class='header-row'>"
+    for i, h in enumerate(batch_data["headers"]): html += f"<td class='{'divider' if i == 2 else ''}'>{h}</td>"
+    html += "</tr>"
+    for r_idx, row in enumerate(batch_data["rows"]):
+        row_cls = "total-row" if r_idx == len(batch_data["rows"]) - 1 else "data-row"
+        html += f"<tr class='{row_cls}'>"
+        for c_idx, val in enumerate(row):
+            display_val = int(val) if isinstance(val, float) and val.is_integer() else val
+            html += f"<td class='{'divider' if c_idx == 2 else ''}'>{display_val}</td>"
+        html += "</tr>"
+    html += "</table></body></html>"
     return html
 
-def safe_get(arr, i, j, default):
-    try:
-        return arr[i][j]
-    except:
-        return default
-
-# -------------------------------
-# SCREENSHOT FUNCTION (ULTRA-CRISP UPGRADE)
-# -------------------------------
 def take_screenshot(html):
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        
-        # 1. FIX BLURRINESS: Emulate a Retina/4K display (3x pixel density)
-        context = browser.new_context(device_scale_factor=2) 
-        page = context.new_page()
-        
-        # 2. FIX TYPEWRITER FONT: Tell it to wait until network traffic stops (downloads finish)
+        page = browser.new_context(device_scale_factor=2).new_page()
         page.set_content(html, wait_until="networkidle")
-        
-        # 3. EXTRA SAFETY: Explicitly force the browser to wait until all web fonts are fully rendered
         page.evaluate("document.fonts.ready")
-        
-        # Snap the lossless PNG
-        image_bytes = page.locator("table").screenshot(type="png")
-        
+        img = page.locator("table").screenshot(type="png")
         browser.close()
-    return image_bytes
+    return base64.b64encode(img).decode('utf-8')
 
-# -------------------------------
-# ROUTES
-# -------------------------------
-@app.route("/", methods=["GET"])
-def home():
-    return "✅ Image API is running with high-fidelity PNG output"
-
-@app.route("/generate", methods=["POST"])
-def generate():
+@app.route("/run-hourly", methods=["POST"])
+def run_hourly():
+    payload = request.json
+    if not payload:
+        return jsonify({"status": "error", "message": "No payload provided"}), 400
+        
+    current_hour = payload.get("currentHour")
+    raw_data = payload.get("rawData", [])
+    routing_data = payload.get("routingData", [])
+    
+    if current_hour < 8 or current_hour > 23:
+        return jsonify({"status": "skip", "message": "Outside operating hours"})
+        
     try:
-        payload = request.json
-        if not payload:
-            return jsonify({"error": "No JSON received"}), 400
+        routing_map = {}
+        for row in routing_data:
+            if len(row) >= 4 and row[0] and row[1] and row[3]:
+                for b in [x.strip() for x in str(row[3]).split(",") if x.strip()]:
+                    if b not in routing_map: routing_map[b] = []
+                    routing_map[b].append({"to": str(row[1]).strip(), "cc": str(row[2]).strip() if len(row) > 2 else ""})
 
-        html = generate_html_from_formatted(payload)
-        image_bytes = take_screenshot(html)
+        processed_batches, time_frame = process_data(raw_data, current_hour)
+        if not processed_batches: 
+            return jsonify({"status": "skip", "message": "No data qualified"})
 
-        # Serve as PNG
-        return send_file(
-            io.BytesIO(image_bytes), 
-            mimetype="image/png",
-            download_name="screenshot.png"
-        )
-
+        outbox = {}
+        for batch_name, batch_data in processed_batches.items():
+            img_b64 = take_screenshot(generate_html(batch_data))
+            filename = f"{batch_name}_{current_hour-1}00-{current_hour}00.png"
+            routes = routing_map.get(batch_name, [{"to": FALLBACK_EMAIL, "cc": ""}])
+            
+            for route in routes:
+                key = f"{route['to']}_{route['cc']}"
+                if key not in outbox: outbox[key] = {"to": route['to'], "cc": route['cc'], "attachments": []}
+                outbox[key]["attachments"].append({"filename": filename, "base64": img_b64})
+                
+        return jsonify({"status": "success", "time_frame": time_frame, "outbox": outbox}), 200
     except Exception as e:
-        print("ERROR:", str(e))
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))

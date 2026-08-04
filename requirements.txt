@@ -1,5 +1,6 @@
 flask
 gunicorn
 playwright
-google-api-python-client
+gspread
+pandas
 google-auth
