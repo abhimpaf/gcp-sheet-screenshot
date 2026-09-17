@@ -69,8 +69,27 @@ Script properties:
 Run `setupDailyMasterTrigger()` once. It creates a midnight trigger that
 schedules that day's runs at `:04` past each hour from 08:00 to 22:00 IST.
 
-`testOneScreenshot()` sends a single table to the service and logs the result
-without emailing anyone — use it to check connectivity after a deploy.
+### Continuation
+
+Apps Script kills an execution at 6 minutes. A run stops fetching at
+`MAX_RUNTIME_MS`, emails what it has, records the delivered batch keys, and
+schedules `resumeHourlyScreenshots` to pick up the rest ~45s later, for up to
+`MAX_ROUNDS` rounds per hour.
+
+Only the delivered keys are stored, never the table data — the next round
+rebuilds the payloads from the sheet. The pending state pins the hour, so a
+round that crosses the hour boundary still reads the right column block.
+
+Recipients with batches in more than one round get one email per round, with
+the subject suffixed `(part N)`.
+
+### Diagnostics
+
+`testOneScreenshot()` sends a single table and logs `sheetReadMs` and `fetchMs`
+separately, so you can tell whether the time is going into Sheets reads or into
+the render service.
+
+`resetToday()` clears the day's markers and any stuck resume trigger.
 
 All hour arithmetic goes through `istInstant_()`, which builds instants from
 UTC with a fixed +05:30 offset. It does not depend on the Apps Script project
