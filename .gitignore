@@ -4,3 +4,4 @@ __pycache__/
 service-account.json
 node_modules/
 .DS_Store
+gcode.js
