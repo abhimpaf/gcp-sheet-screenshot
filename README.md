@@ -47,10 +47,19 @@ gcloud run deploy sheet-screenshot-1 \
   --region <REGION> \
   --memory 2Gi \
   --cpu 2 \
-  --concurrency 2 \
+  --concurrency 1 \
+  --min-instances 2 \
+  --max-instances 10 \
+  --cpu-boost \
   --timeout 300 \
   --set-env-vars API_KEY=<same value as the GCP_API_KEY script property>
 ```
+
+`--concurrency 1` is what makes the Apps Script side fast. It sends 8 requests
+at once; with concurrency 1 those land on up to 8 instances rendering in
+parallel instead of queueing two at a time on one. `--max-instances` caps the
+blast radius and `--cpu-boost` keeps the resulting cold starts out of the
+first wave.
 
 Then confirm the service came up:
 
