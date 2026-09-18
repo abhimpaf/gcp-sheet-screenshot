@@ -395,11 +395,13 @@ def build_table_html(block):
 def render_tables(tables, request_id):
     """Screenshot each {name: block} on one reused browser.
 
-    Returns (images, errors). A table that fails to render is recorded in
-    `errors` and does not lose the rest of the batch.
+    Returns (images, errors, timings). A table that fails to render is recorded
+    in `errors` and does not lose the rest of the batch. `timings` is returned
+    to the caller so per-table cost is visible without reading Cloud Logging.
     """
     images = {}
     errors = {}
+    timings = {}
 
     with _render_slots:
         browser = _browser()
@@ -428,6 +430,7 @@ def render_tables(tables, request_id):
                             raise ValueError("no <table> rendered")
                         images[name] = table.screenshot(type="png")
 
+                    timings[name] = t.ms
                     log(
                         logger, logging.INFO, "rendered %r" % name,
                         request_id=request_id, table=name,
@@ -445,7 +448,7 @@ def render_tables(tables, request_id):
             except Exception:
                 logger.exception("failed to close browser context")
 
-    return images, errors
+    return images, errors, timings
 
 
 def _parse_body(request_id):
@@ -536,7 +539,7 @@ def generate():
             400,
         )
 
-    images, errors = render_tables(blocks, request_id)
+    images, errors, _ = render_tables(blocks, request_id)
     if not images:
         return (
             jsonify(
@@ -622,7 +625,7 @@ def generate_batch():
         table_count=len(tables), table_names=list(tables.keys())[:50])
 
     with Timer() as t:
-        images, errors = render_tables(tables, request_id)
+        images, errors, timings = render_tables(tables, request_id)
 
     log(
         logger,
@@ -643,6 +646,10 @@ def generate_batch():
             "errors": errors,
             "rendered": len(images),
             "failed": len(errors),
+            # Per-table milliseconds, so the caller can see where the time went
+            # without anyone having to open Cloud Logging.
+            "timings": timings,
+            "total_ms": t.ms,
             "request_id": request_id,
         }
     )
