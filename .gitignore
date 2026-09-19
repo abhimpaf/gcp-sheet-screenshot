@@ -5,3 +5,9 @@ service-account.json
 node_modules/
 .DS_Store
 gcode.js
+
+# Internal ClickHouse schema and table names
+total_ca.sql
+
+# Spreadsheet exports and working files: roster names and email addresses
+*.xlsx
