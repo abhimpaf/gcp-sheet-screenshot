@@ -313,8 +313,20 @@ it beats spending a whole round to come back 45 seconds later.
 A tab's own stamp is still checked after its read, as a backstop for a push
 that lands in between; if it does, the round is discarded rather than mailed.
 
-The check fails open. An unreadable stamp lets the run proceed, so a change to
-the push's wording cannot silently stop every report.
+**The check fails open, in both senses.** A stamp that cannot be parsed lets
+the run proceed, so a change to the push's wording cannot silently stop every
+report — and a stamp that cannot be *read at all* does the same. `readStamp_()`
+catches its own errors and returns `null`. This check exists to stop a stale
+report going out; it must never become the reason no report goes out. On
+20 Sep at 18:04 an uncaught `Too many simultaneous invocations` from this one
+call ended the whole hour.
+
+It is a single call, not two: `Spreadsheet.getRange()` takes sheet-qualified
+A1, so `total_ca!A1` resolves the tab and reads the cell in one round trip.
+
+An unexpected failure anywhere else in the run now costs a round rather than
+the hour — the handler schedules the next round if any remain, and only mails
+the failure summary once they are used up.
 
 **It retries into the gaps.** `RESUME_DELAYS_MS` grows with the round — 45s,
 90s, then 150s — so an early retry catches a push that is nearly done and a
