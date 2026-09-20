@@ -130,6 +130,7 @@ dropdown.
 | `resetToday()` | Clearing today's completion markers so hours can be re-sent. |
 | `testOneScreenshot()` | Isolating whether time goes into Sheets reads or the render service. |
 | `scheduleExactHourlyRuns()` | Re-booking today's remaining hours without touching the nightly trigger. |
+| `refreshRouting()` | You edited `Email_Routing` and want it live now rather than within the hour. |
 
 ### Settings you change by hand
 
@@ -260,13 +261,72 @@ the kill. A sheet already read is rendered and mailed right up to `execStop` —
 late beats never, and the read has been paid for either way.
 
 Whatever is left over — undelivered batches, or sheets never opened — is
-picked up by `resumeHourlyScreenshots` ~45s later, for up to `MAX_ROUNDS`
-rounds per hour. The delivered keys go in the pending property; the table
-payloads themselves go in `CacheService` (chunked, 100KB per value), so the
-resume round does not pay the read cost a second time for sheets round 1
-already read. The cache is best-effort: a miss just rebuilds from the sheet.
-The pending state pins the hour, so a round that crosses the hour boundary
-still reads the right column block.
+picked up by `resumeHourlyScreenshots`, for up to `MAX_ROUNDS` (4) rounds per
+hour. The delivered keys go in the pending property; the table payloads
+themselves go in `CacheService` (chunked, 100KB per value), so the resume round
+does not pay the read cost a second time for sheets round 1 already read. The
+routing map is cached the same way. The cache is best-effort: a miss just
+rebuilds from the sheet. The pending state pins the hour, so a round that
+crosses the hour boundary still reads the right column block.
+
+### Waiting for the data, not the clock
+
+The ClickHouse push is scheduled every 10 minutes on the `:00`, but every other
+dashboard in that scheduler fires at `:00` too, so it queues and actually lands
+anywhere from `:00` to `:05`. While it writes, the document is unavailable and
+a read blocks — on 20 Sep a single `getLastRow()` sat for **481 seconds** before
+Apps Script's own service timeout fired, and the retry then succeeded in 1.5s.
+
+There is no safe minute to schedule into, so the run does not try to find one:
+
+**It checks whether the data is there.** `total_ca!A1` carries the push's own
+stamp (`Last updated: 08:04 AM`), and `dataReadiness_()` gives one of three
+answers:
+
+| Answer | Meaning | What the run does |
+| ------ | ------- | ----------------- |
+| stale | stamp predates the hour being reported | mail nothing, cache nothing, come back later |
+| settling | stamp just appeared; rows still arriving | sleep until settled, then read |
+| ready | stamp covers the hour and has settled | read now |
+
+The middle case is the subtle one. **The push writes its stamp before the rows
+under it finish updating** — the data lands roughly 30s later and the document
+stays busy for another ~20s after that. So a stamp that has only just appeared
+means *wait*, not *go*; reading immediately gets half-written numbers.
+`DATA_SETTLE_MS` (50s) covers both phases.
+
+Because of that, the stamp is read **before** the report tabs, from `total_ca!A1`
+directly, as a single cell. Taking it from a report tab's `A2` instead would
+mean having already read the numbers it is supposed to vet — and those mirrors
+are formulas pointing here, so they lag by a recalculation. A round with
+everything cached skips the check entirely; its data was vetted by the round
+that read it.
+
+The stamp only has minute resolution, so `08:04` is treated as `08:04:59` when
+working out when it settles. Being 30s late costs nothing; being 30s early
+costs a wrong report.
+
+Waiting is done with `Utilities.sleep()` rather than another round, when the
+wait fits inside `readStop` — the document is busy anyway, so sleeping through
+it beats spending a whole round to come back 45 seconds later.
+
+A tab's own stamp is still checked after its read, as a backstop for a push
+that lands in between; if it does, the round is discarded rather than mailed.
+
+The check fails open. An unreadable stamp lets the run proceed, so a change to
+the push's wording cannot silently stop every report.
+
+**It retries into the gaps.** `RESUME_DELAYS_MS` grows with the round — 45s,
+90s, then 150s — so an early retry catches a push that is nearly done and a
+later one waits out a window that has clearly not opened. A round that finds
+stale data costs seconds, not minutes, because it stops after the first sheet.
+
+**It touches the document as little as possible.** Every `SpreadsheetApp` call
+is a chance to block for minutes with no way to interrupt it — a blocked call
+cannot be cut short, which is why the 20 Sep run reached 535s against a 300s
+budget without being killed. Routing is read late (only once there are images
+worth addressing) and cached for an hour, so a retry round that has everything
+cached touches the spreadsheet zero times.
 
 Recipients with batches in more than one round get one email per round, with
 the subject suffixed `(part N)`.
